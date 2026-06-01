@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hyperbolic Chat</title>
+  <title>LLM Chat</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
   <style>
     * { box-sizing: border-box; }
@@ -47,6 +47,9 @@
     .msg .markdown {
       word-break: break-word;
       line-height: 1.5;
+    }
+    .msg .markdown.streaming {
+      white-space: pre-wrap;
     }
     .msg .markdown > :first-child { margin-top: 0; }
     .msg .markdown > :last-child { margin-bottom: 0; }
@@ -108,17 +111,20 @@
       border-radius: 6px;
       overflow-x: auto;
       background: #1e293b !important;
+      color: #f1f5f9;
       font-size: 0.85rem;
       line-height: 1.45;
     }
     .msg.user pre.code-block {
       background: rgba(0, 0, 0, 0.25) !important;
+      color: #f8fafc;
     }
     .msg pre.code-block code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       white-space: pre;
       display: block;
       background: transparent !important;
+      color: inherit;
       text-shadow: none;
     }
     .msg .code-lang {
@@ -154,6 +160,7 @@
     }
     .toolbar {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 0.5rem;
       margin-bottom: 0.75rem;
@@ -172,8 +179,12 @@
   </style>
 </head>
 <body>
-  <h1>Hyperbolic Chat</h1>
+  <h1>LLM Chat</h1>
   <div class="toolbar">
+    <label for="provider">Provider</label>
+    <select id="provider" disabled>
+      <option>Loading…</option>
+    </select>
     <label for="model">Model</label>
     <select id="model" disabled>
       <option>Loading…</option>
@@ -192,25 +203,59 @@
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-markup.min.js"></script>
   <script>
     const messagesEl = document.getElementById("messages");
     const form = document.getElementById("form");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
     const errorEl = document.getElementById("error");
+    const providerSelect = document.getElementById("provider");
     const modelSelect = document.getElementById("model");
     const clearBtn = document.getElementById("clear");
-    const MODEL_STORAGE_KEY = "hyperbolic-chat-model";
+    const PROVIDER_STORAGE_KEY = "chat-provider";
+    const modelStorageKey = (provider) => `chat-model-${provider}`;
     const SYSTEM_MESSAGE = { role: "system", content: "You are a helpful assistant." };
 
     const history = [SYSTEM_MESSAGE];
 
-    async function loadModels() {
-      const res = await fetch("/api/models");
+    async function loadProviders() {
+      const res = await fetch("/api/providers");
       const data = await res.json();
-      if (!res.ok) throw new Error("Could not load models");
+      if (!res.ok) throw new Error(data.error || "Could not load providers");
+      if (!data.providers.length) {
+        throw new Error(
+          "No API keys configured. Set HYPERBOLIC_API_KEY and/or OPENROUTER_API_KEY."
+        );
+      }
 
-      const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+      const savedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
+      providerSelect.replaceChildren();
+      for (const p of data.providers) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.label;
+        providerSelect.appendChild(opt);
+      }
+      const initialProvider =
+        data.providers.find((p) => p.id === savedProvider)?.id || data.default;
+      providerSelect.value = initialProvider;
+      providerSelect.disabled = false;
+      return initialProvider;
+    }
+
+    async function loadModels(provider) {
+      modelSelect.disabled = true;
+      modelSelect.replaceChildren();
+      const loading = document.createElement("option");
+      loading.textContent = "Loading…";
+      modelSelect.appendChild(loading);
+
+      const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load models");
+
+      const savedModel = localStorage.getItem(modelStorageKey(provider));
       modelSelect.replaceChildren();
       for (const m of data.models) {
         const opt = document.createElement("option");
@@ -218,17 +263,24 @@
         opt.textContent = m.label;
         modelSelect.appendChild(opt);
       }
-      const initial =
-        data.models.find((m) => m.id === saved)?.id || data.default;
-      modelSelect.value = initial;
+      const initialModel =
+        data.models.find((m) => m.id === savedModel)?.id || data.default;
+      modelSelect.value = initialModel;
       modelSelect.disabled = false;
     }
 
-    modelSelect.addEventListener("change", () => {
-      localStorage.setItem(MODEL_STORAGE_KEY, modelSelect.value);
+    providerSelect.addEventListener("change", () => {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, providerSelect.value);
+      loadModels(providerSelect.value).catch((err) => showError(err.message));
     });
 
-    loadModels().catch((err) => showError(err.message));
+    modelSelect.addEventListener("change", () => {
+      localStorage.setItem(modelStorageKey(providerSelect.value), modelSelect.value);
+    });
+
+    loadProviders()
+      .then((provider) => loadModels(provider))
+      .catch((err) => showError(err.message));
 
     const PRISM_LANGS = {
       python: "python",
@@ -237,6 +289,8 @@
       js: "javascript",
       node: "javascript",
       nodejs: "javascript",
+      html: "html",
+      htm: "html",
     };
 
     function prismLanguage(lang) {
@@ -310,9 +364,15 @@
 
     function highlightCode(bubble) {
       if (!window.Prism) return;
-      bubble.querySelectorAll("code.language-python, code.language-javascript").forEach(
+      bubble.querySelectorAll(
+        "code.language-python, code.language-javascript, code.language-html"
+      ).forEach(
         (block) => Prism.highlightElement(block)
       );
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     function addBubble(role, text) {
@@ -324,7 +384,60 @@
       highlightCode(bubble);
       div.appendChild(bubble);
       messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollToBottom();
+    }
+
+    function createStreamingBotBubble() {
+      const div = document.createElement("div");
+      div.className = "msg bot";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const streamEl = document.createElement("div");
+      streamEl.className = "markdown streaming";
+      bubble.appendChild(streamEl);
+      div.appendChild(bubble);
+      messagesEl.appendChild(div);
+      scrollToBottom();
+      return { div, bubble, streamEl };
+    }
+
+    function finalizeBubble(bubble, text) {
+      bubble.replaceChildren();
+      fillBubble(bubble, text);
+      highlightCode(bubble);
+      scrollToBottom();
+    }
+
+    async function readChatStream(res, onUpdate) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let full = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineAt;
+        while ((newlineAt = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineAt).trim();
+          buffer = buffer.slice(newlineAt + 1);
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") continue;
+          const data = JSON.parse(payload);
+          if (data.error) {
+            throw new Error(
+              typeof data.error === "string" ? data.error : JSON.stringify(data.error)
+            );
+          }
+          if (data.content) {
+            full += data.content;
+            onUpdate(full);
+          }
+        }
+      }
+      return full;
     }
 
     function showError(msg) {
@@ -354,6 +467,8 @@
       history.push({ role: "user", content: text });
       addBubble("user", text);
 
+      const { div: botRow, bubble, streamEl } = createStreamingBotBubble();
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -361,10 +476,12 @@
           body: JSON.stringify({
             messages: history,
             model: modelSelect.value,
+            provider: providerSelect.value,
           }),
         });
-        const data = await res.json();
+
         if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
           const detail = data.detail
             ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))
             : data.detail;
@@ -373,9 +490,15 @@
           );
         }
 
-        history.push({ role: "assistant", content: data.reply });
-        addBubble("bot", data.reply);
+        const reply = await readChatStream(res, (text) => {
+          streamEl.textContent = text;
+          scrollToBottom();
+        });
+
+        history.push({ role: "assistant", content: reply });
+        finalizeBubble(bubble, reply);
       } catch (err) {
+        botRow.remove();
         showError(err.message);
         history.pop();
       } finally {

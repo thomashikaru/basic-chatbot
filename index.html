@@ -67,16 +67,6 @@
       border-radius: 4px;
     }
     .msg.user .markdown code { background: rgba(255, 255, 255, 0.2); }
-    .msg .markdown pre:not(.code-block) {
-      overflow-x: auto;
-      padding: 0.5rem 0.75rem;
-      border-radius: 6px;
-      background: #1e293b;
-      color: #f1f5f9;
-    }
-    .msg.user .markdown pre:not(.code-block) {
-      background: rgba(0, 0, 0, 0.25);
-    }
     .msg .markdown blockquote {
       margin: 0.5em 0;
       padding-left: 1em;
@@ -102,12 +92,19 @@
     .msg .markdown hr { border: none; border-top: 1px solid #d1d5db; margin: 0.75em 0; }
     .msg .markdown + .markdown,
     .msg .markdown + .code-lang,
-    .msg pre.code-block + .markdown {
+    .msg .markdown + .code-wrap,
+    .msg .code-lang + .code-wrap,
+    .msg .code-wrap + .markdown,
+    .msg .code-wrap + .code-wrap {
       margin-top: 0.5rem;
     }
-    .msg pre.code-block {
+    .code-wrap {
+      position: relative;
+    }
+    .msg pre.code-block,
+    .code-wrap pre {
       margin: 0;
-      padding: 0.75rem 1rem;
+      padding: 0.75rem 2.25rem 0.75rem 1rem;
       border-radius: 6px;
       overflow-x: auto;
       background: #1e293b !important;
@@ -115,11 +112,13 @@
       font-size: 0.85rem;
       line-height: 1.45;
     }
-    .msg.user pre.code-block {
+    .msg.user pre.code-block,
+    .msg.user .code-wrap pre {
       background: rgba(0, 0, 0, 0.25) !important;
       color: #f8fafc;
     }
-    .msg pre.code-block code {
+    .msg pre.code-block code,
+    .code-wrap pre code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       white-space: pre;
       display: block;
@@ -133,6 +132,38 @@
       opacity: 0.75;
       margin-bottom: 0.25rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .copy-code-btn {
+      position: absolute;
+      top: 0.35rem;
+      right: 0.35rem;
+      z-index: 1;
+      padding: 0.3rem;
+      border: none;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      cursor: pointer;
+      line-height: 0;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .code-wrap:hover .copy-code-btn,
+    .copy-code-btn:focus-visible {
+      opacity: 0.65;
+    }
+    .copy-code-btn:hover {
+      opacity: 1 !important;
+      background: rgba(255, 255, 255, 0.16);
+    }
+    .copy-code-btn.copied {
+      opacity: 1;
+      color: #86efac;
+    }
+    .copy-code-btn svg {
+      width: 14px;
+      height: 14px;
+      display: block;
     }
     form { display: flex; gap: 0.5rem; }
     input[type="text"] {
@@ -297,6 +328,51 @@
       return PRISM_LANGS[lang.toLowerCase()] || null;
     }
 
+    const COPY_ICON = (
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+      + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+      + 'aria-hidden="true">'
+      + '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>'
+      + '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'
+      + '</svg>'
+    );
+
+    function copyButtonForPre(pre) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-code-btn";
+      btn.title = "Copy code";
+      btn.innerHTML = COPY_ICON;
+      btn.addEventListener("click", async () => {
+        const codeEl = pre.querySelector("code") || pre;
+        try {
+          await navigator.clipboard.writeText(codeEl.textContent);
+          btn.classList.add("copied");
+          btn.title = "Copied!";
+          setTimeout(() => {
+            btn.classList.remove("copied");
+            btn.title = "Copy code";
+          }, 1500);
+        } catch {
+          btn.title = "Copy failed";
+        }
+      });
+      return btn;
+    }
+
+    function wrapPreWithCopy(pre) {
+      if (pre.parentElement?.classList.contains("code-wrap")) return;
+      const wrap = document.createElement("div");
+      wrap.className = "code-wrap";
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(copyButtonForPre(pre));
+      wrap.appendChild(pre);
+    }
+
+    function attachCopyButtons(container) {
+      container.querySelectorAll("pre").forEach(wrapPreWithCopy);
+    }
+
     marked.setOptions({ breaks: true, gfm: true });
 
     function renderMarkdown(text) {
@@ -360,6 +436,7 @@
           bubble.appendChild(pre);
         }
       }
+      attachCopyButtons(bubble);
     }
 
     function highlightCode(bubble) {
